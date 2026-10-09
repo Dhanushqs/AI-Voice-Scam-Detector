@@ -1,2 +1,1 @@
-[tool.vercel]
-entrypoint = "analyze:handler"
+
