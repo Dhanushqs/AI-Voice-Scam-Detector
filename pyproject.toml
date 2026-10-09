@@ -1,1 +1,2 @@
-
+[tool.vercel]
+entrypoint = "api/analyze.py"
