@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Scam Detector (prototype)</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5f6b7a; --line:#e2e6ea;
+          --low:#1f9d55; --med:#d98a00; --high:#d93025; --accent:#2457d6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --card:#1a1f26; --ink:#eef1f4; --muted:#9aa6b5; --line:#2b323b; --accent:#6c92ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:16px; margin-bottom:16px; }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:24px; text-align:center;
+          cursor:pointer; color:var(--muted); }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:10px 16px; font-size:1rem; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  textarea { width:100%; min-height:84px; border:1px solid var(--line); border-radius:8px;
+             padding:10px; font:inherit; background:var(--card); color:var(--ink); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  audio { width:100%; margin-top:12px; }
+  .meter { height:14px; background:var(--line); border-radius:7px; overflow:hidden; margin:8px 0; }
+  .meter > div { height:100%; width:0; transition:width .5s, background .5s; }
+  .badge { display:inline-block; font-weight:700; padding:2px 10px; border-radius:999px; color:#fff; }
+  ul { margin:8px 0 0; padding-left:20px; }
+  .transcript { white-space:pre-wrap; color:var(--muted); }
+  .err { color:var(--high); }
+  small { color:var(--muted); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Scam Detector</h1>
+  <p class="sub">College prototype. Upload a short call recording (under 4 MB) and get a risk score.</p>
+
+  <section class="card">
+    <div id="drop" class="drop" tabindex="0">Drop an audio file here, or click to choose<br><small>mp3, wav, m4a, ogg, webm</small></div>
+    <input id="file" type="file" accept="audio/*" class="hidden">
+    <audio id="player" controls class="hidden"></audio>
+    <div class="row">
+      <button id="analyze" disabled>Analyze call</button>
+      <span id="status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <strong>No audio handy? Try text.</strong>
+    <p class="sub" style="margin:4px 0 8px">Paste a role-played transcript, or use a sample.</p>
+    <textarea id="text" placeholder="e.g. This is the police. Your account has been suspended. Share the OTP immediately."></textarea>
+    <div class="row">
+      <button id="analyzeText" class="ghost">Score text</button>
+      <button id="sampleScam" class="ghost">Sample: scam</button>
+      <button id="sampleSafe" class="ghost">Sample: normal</button>
+    </div>
+  </section>
+
+  <section id="result" class="card hidden" aria-live="polite">
+    <div><span id="badge" class="badge"></span> <strong id="scoreText"></strong></div>
+    <div class="meter"><div id="bar"></div></div>
+    <div><strong>Why flagged</strong><ul id="reasons"></ul></div>
+    <p><strong>Transcript</strong></p>
+    <p id="transcript" class="transcript"></p>
+    <small>This is a prototype. A high score means "suspicious, verify the caller", not proof of a scam.</small>
+  </section>
+
+  <p><small>Use only role-played or consented recordings. Audio is sent to a speech-to-text service and is not stored by this app.</small></p>
+</main>
+
+<script>
+const MAX = 4 * 1024 * 1024;
+const $ = id => document.getElementById(id);
+let chosen = null;
+
+const SAMPLES = {
+  scam: "Hello, this is officer Sharma from the cyber police. Your account has been suspended and there is a warrant against you. Do not disconnect and do not tell anyone. Share the OTP immediately or we will arrest you.",
+  safe: "Hi, this is the pharmacy. Your prescription is ready for pickup. We are open until eight this evening. Thanks and have a good day."
+};
+
+function setFile(f) {
+  if (!f) return;
+  if (f.size > MAX) { $("status").innerHTML = '<span class="err">File is over 4 MB. Please trim it.</span>'; return; }
+  chosen = f;
+  $("player").src = URL.createObjectURL(f);
+  $("player").classList.remove("hidden");
+  $("drop").textContent = f.name + " (" + (f.size / 1024).toFixed(0) + " KB)";
+  $("analyze").disabled = false;
+  $("status").textContent = "";
+}
+
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+$("file").onchange = e => setFile(e.target.files[0]);
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); setFile(e.dataTransfer.files[0]); };
+
+async function call(url, options, btn) {
+  btn.disabled = true;
+  $("status").textContent = "Analyzing...";
+  try {
+    const r = await fetch(url, options);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Request failed");
+    show(data);
+    $("status").textContent = "";
+  } catch (e) {
+    $("status").innerHTML = '<span class="err">' + e.message + "</span>";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("analyze").onclick = () => call(
+  "/api/analyze?filename=" + encodeURIComponent(chosen.name),
+  { method: "POST", headers: { "Content-Type": chosen.type || "application/octet-stream" }, body: chosen },
+  $("analyze"));
+
+$("analyzeText").onclick = () => {
+  const t = $("text").value.trim();
+  if (!t) { $("status").textContent = "Type or paste some text first."; return; }
+  call("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: t }) }, $("analyzeText"));
+};
+$("sampleScam").onclick = () => $("text").value = SAMPLES.scam;
+$("sampleSafe").onclick = () => $("text").value = SAMPLES.safe;
+
+function show(d) {
+  const colors = { LOW: "var(--low)", MEDIUM: "var(--med)", HIGH: "var(--high)" };
+  $("result").classList.remove("hidden");
+  $("badge").textContent = d.level;
+  $("badge").style.background = colors[d.level];
+  $("scoreText").textContent = d.score + " / 100";
+  $("bar").style.width = d.score + "%";
+  $("bar").style.background = colors[d.level];
+  $("reasons").innerHTML = "";
+  (d.reasons.length ? d.reasons : ["No scam patterns found"]).forEach(r => {
+    const li = document.createElement("li"); li.textContent = r; $("reasons").appendChild(li);
+  });
+  $("transcript").textContent = d.transcript || d.note || "(no speech detected)";
+}
+</script>
+</body>
+</html>
