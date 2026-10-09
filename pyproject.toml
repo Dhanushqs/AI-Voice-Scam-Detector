@@ -1,2 +1,11 @@
+
+[project]
+name = "ai-voice-scam-detector"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
 [tool.vercel]
 entrypoint = "api.analyze:handler"
+
+
